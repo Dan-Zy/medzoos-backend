@@ -1,0 +1,415 @@
+const prisma = require('../../config/database');
+const AppError = require('../../utils/AppError');
+const { emitOrderUpdated } = require('../../utils/orderTracking.socket');
+const {
+  normalizeWeeklySchedule,
+  normalizeTimeRange,
+  generateMeetingRoom,
+  assertStatusTransition,
+} = require('../../utils/telehealth.utils');
+const {
+  notifyAppointmentConfirmed,
+  notifyAppointmentCompleted,
+} = require('../../utils/telehealth.notifications');
+const inboxEvents = require('../notifications/inbox.events');
+const {
+  createChatForAppointment,
+  extendChatAfterCompletion,
+  createSystemMessage,
+} = require('../telehealth/telehealth.chat.service');
+const { activateConsultationMode } = require('../telehealth/consultation-mode.service');
+const clinicalService = require('../clinical/clinical.service');
+const adminPracticeLocationService = require('../admin/adminPracticeLocation.service');
+
+const sanitizeDoctor = (doctor) => {
+  const copy = { ...doctor };
+  delete copy.password;
+  return copy;
+};
+
+const appointmentInclude = {
+  customer: { select: { id: true, name: true, email: true, phone: true, profile_data: true } },
+  prescription: true,
+  consultation: true,
+  record_share: true,
+  lab_orders: {
+    include: { lab_test: { select: { id: true, name: true, category: true } } },
+  },
+};
+
+const getProfile = async (doctorId) => {
+  const doctor = await prisma.doctor.findUnique({
+    where: { id: doctorId },
+    include: { account: { select: { email: true } } },
+  });
+  if (!doctor) throw new AppError('Doctor not found', 404);
+  return sanitizeDoctor({
+    ...doctor,
+    email: doctor.account?.email || doctor.email,
+  });
+};
+
+const updateProfile = async (doctorId, data) => {
+  const allowed = {
+    phone: data.phone,
+    about: data.about,
+    specialty: data.specialty,
+    hospital: data.hospital,
+    fee: data.fee !== undefined ? Number(data.fee) : undefined,
+    experience_years: data.experience_years !== undefined ? Number(data.experience_years) : undefined,
+    languages: data.languages,
+    qualifications: data.qualifications,
+    photo_url: data.photo_url,
+    notification_preferences: data.notification_preferences,
+  };
+
+  if (data.name !== undefined) {
+    const trimmedName = String(data.name).trim();
+    if (!trimmedName || trimmedName.length < 2) {
+      throw new AppError('Name must be at least 2 characters', 400);
+    }
+    if (trimmedName.length > 50) {
+      throw new AppError('Name cannot exceed 50 characters', 400);
+    }
+    if (!/^[a-zA-Z\s\.\-']+$/.test(trimmedName)) {
+      throw new AppError('Name contains invalid characters. Only letters, spaces, dots, hyphens and apostrophes are allowed.', 400);
+    }
+    allowed.name = trimmedName;
+  }
+
+  Object.keys(allowed).forEach((key) => allowed[key] === undefined && delete allowed[key]);
+
+  if (typeof allowed.languages === 'string') {
+    allowed.languages = allowed.languages.split(',').map((l) => l.trim()).filter(Boolean);
+  }
+
+  const doctor = await prisma.doctor.update({
+    where: { id: doctorId },
+    data: allowed,
+    include: { account: { select: { email: true } } },
+  });
+
+  return sanitizeDoctor({
+    ...doctor,
+    email: doctor.account?.email || doctor.email,
+  });
+};
+
+const updatePassword = async (doctorId, currentPassword, newPassword) => {
+  if (!newPassword || newPassword.length < 8) {
+    throw new AppError('New password must be at least 8 characters long', 400);
+  }
+  if (!/\d/.test(newPassword) || !/[a-zA-Z]/.test(newPassword)) {
+    throw new AppError('New password must contain both letters and numbers', 400);
+  }
+  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(newPassword)) {
+    throw new AppError('New password must contain at least one special character', 400);
+  }
+
+  const doctor = await prisma.doctor.findUnique({
+    where: { id: doctorId },
+    include: { account: true },
+  });
+  if (!doctor?.account?.password && !doctor?.password) {
+    throw new AppError('Unable to update password', 400);
+  }
+
+  const { comparePassword, hashPassword } = require('../auth/auth.helper');
+  const storedPassword = doctor.account?.password || doctor.password;
+  const match = await comparePassword(currentPassword, storedPassword);
+  if (!match) throw new AppError('Current password is incorrect', 400);
+
+  const hashed = await hashPassword(newPassword);
+  if (doctor.account_id) {
+    await prisma.account.update({
+      where: { id: doctor.account_id },
+      data: { password: hashed },
+    });
+  } else {
+    await prisma.doctor.update({
+      where: { id: doctorId },
+      data: { password: hashed },
+    });
+  }
+};
+
+const getAppointments = async (doctorId) => {
+  try {
+    return await prisma.doctorAppointment.findMany({
+      where: { doctor_id: doctorId },
+      include: appointmentInclude,
+      orderBy: { appointment_date: 'desc' },
+    });
+  } catch (err) {
+    return prisma.doctorAppointment.findMany({
+      where: { doctor_id: doctorId },
+      include: {
+        customer: { select: { id: true, name: true, email: true, phone: true } },
+        prescription: true,
+      },
+      orderBy: { appointment_date: 'desc' },
+    });
+  }
+};
+
+const updateAppointmentStatus = async (doctorId, appointmentId, status, notes) => {
+  const appointment = await prisma.doctorAppointment.findFirst({
+    where: { id: appointmentId, doctor_id: doctorId },
+    include: {
+      customer: { select: { id: true, name: true, email: true, phone: true } },
+      doctor: { include: { account: { select: { email: true } } } },
+    },
+  });
+  if (!appointment) throw new AppError('Appointment not found', 404);
+
+  assertStatusTransition(appointment.status, status);
+
+  const updateData = { status };
+  if (notes !== undefined) updateData.consultation_notes = notes;
+
+  if (status === 'confirmed') {
+    let updated = await prisma.doctorAppointment.update({
+      where: { id: appointmentId },
+      data: updateData,
+      include: appointmentInclude,
+    });
+
+    if (updated.preferred_consultation_mode && !updated.consultation_mode) {
+      updated = await activateConsultationMode(appointmentId, updated.preferred_consultation_mode);
+    }
+
+    await notifyAppointmentConfirmed({
+      doctorEmail: appointment.doctor.account?.email || appointment.doctor.email,
+      patientEmail: appointment.customer?.email,
+      appointment: updated,
+    });
+
+    await inboxEvents.appointmentStatus({
+      appointment: updated,
+      status: 'confirmed',
+      doctorName: updated.doctor?.name,
+    });
+
+    emitOrderUpdated({
+      orderId: updated.id,
+      status: updated.status,
+      type: 'doctor',
+      customerId: updated.customer_id,
+      vendorId: updated.doctor_id,
+    });
+
+    return updated;
+  }
+
+  if (status === 'in_progress' || status === 'checked_in') {
+    if (!appointment.meeting_id && appointment.consultation_mode === 'online') {
+      const meeting = generateMeetingRoom(appointment.id);
+      updateData.meeting_id = meeting.meeting_id;
+      updateData.meeting_url = meeting.meeting_url;
+    }
+  }
+
+  const updated = await prisma.doctorAppointment.update({
+    where: { id: appointmentId },
+    data: updateData,
+    include: appointmentInclude,
+  });
+
+  try {
+    if (status === 'in_progress' || status === 'checked_in') {
+      await clinicalService.startConsultation(updated);
+    }
+    if (status === 'completed') {
+      await clinicalService.completeConsultation(updated, {
+        clinical_notes: notes || updated.consultation_notes,
+      });
+    }
+  } catch (err) {
+    console.error('clinical status sync failed', err.message);
+  }
+
+  if (status === 'completed') {
+    await extendChatAfterCompletion(appointmentId);
+    await createSystemMessage(
+      appointmentId,
+      'Consultation completed. Chat stays open for 72 hours for follow-up questions.'
+    );
+    await notifyAppointmentCompleted({
+      patientEmail: appointment.customer?.email,
+      appointment: updated,
+    });
+
+    await inboxEvents.appointmentStatus({
+      appointment: updated,
+      status: 'completed',
+      doctorName: updated.doctor?.name,
+    });
+  }
+
+  if (status === 'cancelled' || status === 'rejected' || status === 'no_show') {
+    await inboxEvents.appointmentStatus({
+      appointment: updated,
+      status,
+      doctorName: updated.doctor?.name,
+    });
+  }
+
+  emitOrderUpdated({
+    orderId: updated.id,
+    status: updated.status,
+    type: 'doctor',
+    customerId: updated.customer_id,
+    vendorId: updated.doctor_id,
+  });
+
+  return updated;
+};
+
+const updateSchedule = async (doctorId, slots) => {
+  const normalized = normalizeWeeklySchedule(slots).map((entry) => {
+    const validSlots = [];
+    if (Array.isArray(entry.slots)) {
+      for (const range of entry.slots) {
+        if (!range || !String(range).trim()) continue;
+        const norm = normalizeTimeRange(range);
+        if (!norm) {
+          throw new AppError(
+            `Invalid consultation time format: "${range}". Please use a valid time format (e.g., 09:00 AM - 01:00 PM).`,
+            400
+          );
+        }
+        validSlots.push(norm);
+      }
+    }
+    return {
+      ...entry,
+      slots: validSlots,
+    };
+  });
+
+  const doctor = await prisma.doctor.update({
+    where: { id: doctorId },
+    data: { slots: normalized },
+  });
+  return sanitizeDoctor(doctor);
+};
+
+const getSchedule = async (doctorId) => {
+  const doctor = await prisma.doctor.findUnique({ where: { id: doctorId } });
+  if (!doctor) throw new AppError('Doctor not found', 404);
+  return normalizeWeeklySchedule(doctor.slots);
+};
+
+const getPatients = async (doctorId) => clinicalService.listDoctorPatients(doctorId);
+
+const getPatient = async (doctorId, patientId) =>
+  clinicalService.getPatientClinicalHistory(doctorId, patientId);
+
+const getStats = async (doctorId) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const appointments = await prisma.doctorAppointment.findMany({
+    where: { doctor_id: doctorId },
+    select: {
+      status: true,
+      fee: true,
+      payment_status: true,
+      appointment_date: true,
+      customer_id: true,
+    },
+  });
+
+  const todayAppointments = appointments.filter((item) => {
+    const date = new Date(item.appointment_date);
+    return date >= today && date < tomorrow && item.status !== 'cancelled';
+  }).length;
+
+  const totalPatients = new Set(appointments.map((item) => item.customer_id)).size;
+  const pendingReviews = appointments.filter((item) => item.status === 'pending').length;
+  const upcomingAppointments = appointments.filter((item) =>
+    ['pending', 'confirmed'].includes(item.status) && new Date(item.appointment_date) >= today
+  ).length;
+  const completedAppointments = appointments.filter((item) => item.status === 'completed').length;
+  const videoConsultations = appointments.filter((item) =>
+    ['confirmed', 'in_progress', 'completed'].includes(item.status)
+  ).length;
+  const revenue = appointments
+    .filter((item) => item.status === 'completed' && item.payment_status === 'paid')
+    .reduce((sum, item) => sum + item.fee, 0);
+
+  const doctor = await prisma.doctor.findUnique({
+    where: { id: doctorId },
+    select: { rating: true, reviews_count: true },
+  });
+
+  const reviewsCount = doctor?.reviews_count || 0;
+  const rating = reviewsCount > 0 ? Number(doctor?.rating || 0) : 0;
+
+  return {
+    todayAppointments,
+    totalPatients,
+    videoConsultations,
+    pendingReviews,
+    upcomingAppointments,
+    completedAppointments,
+    revenue,
+    rating,
+    reviewsCount,
+  };
+};
+
+const createPrescription = async (doctorId, data) =>
+  clinicalService.savePrescription(doctorId, data);
+
+const getPrescription = async (doctorId, appointmentId) => {
+  const prescription = await prisma.doctorPrescription.findFirst({
+    where: {
+      appointment_id: appointmentId,
+      doctor_id: doctorId,
+    },
+  });
+  if (!prescription) throw new AppError('Prescription not found', 404);
+  return prescription;
+};
+
+const getHospitals = async () =>
+  prisma.hospital.findMany({
+    where: { is_active: true },
+    select: { id: true, name: true, city: true, address: true },
+    orderBy: { name: 'asc' },
+  });
+
+const listPracticeLocations = (doctorId) =>
+  adminPracticeLocationService.listPracticeLocations(doctorId);
+
+const createPracticeLocation = (doctorId, payload) =>
+  adminPracticeLocationService.createPracticeLocation(doctorId, payload);
+
+const updatePracticeLocation = (doctorId, locationId, payload) =>
+  adminPracticeLocationService.updatePracticeLocation(doctorId, locationId, payload);
+
+const deletePracticeLocation = (doctorId, locationId) =>
+  adminPracticeLocationService.deletePracticeLocation(doctorId, locationId);
+
+module.exports = {
+  getProfile,
+  updateProfile,
+  updatePassword,
+  getAppointments,
+  updateAppointmentStatus,
+  updateSchedule,
+  getSchedule,
+  getPatients,
+  getPatient,
+  getStats,
+  createPrescription,
+  getPrescription,
+  getHospitals,
+  listPracticeLocations,
+  createPracticeLocation,
+  updatePracticeLocation,
+  deletePracticeLocation,
+};

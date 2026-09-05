@@ -1,0 +1,66 @@
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const env = require('../../config/env');
+
+const hashPassword = async (password) => {
+  const salt = await bcrypt.genSalt(10);
+  return bcrypt.hash(password, salt);
+};
+
+const comparePassword = async (password, hashedPassword) => {
+  return bcrypt.compare(password, hashedPassword);
+};
+
+const generateTokens = (user) => {
+  const payload = { id: user.id, role: user.role };
+  if (user.accountId) payload.accountId = user.accountId;
+
+  const accessToken = jwt.sign(payload, env.JWT_ACCESS_SECRET, {
+    expiresIn: '24h',
+  });
+
+  const refreshToken = jwt.sign(payload, env.JWT_REFRESH_SECRET, {
+    expiresIn: '30d',
+  });
+
+  return { accessToken, refreshToken };
+};
+
+const generatePartnerTokens = (partner, role) => {
+  const accountId = partner.accountId || partner.account_id || partner.account?.id;
+  return generateTokens({ id: partner.id, role, accountId });
+};
+
+const setTokenCookies = (res, accessToken, refreshToken, options = {}) => {
+  const { includeAccessToken = true } = options;
+  if (includeAccessToken) {
+    res.cookie('accessToken', accessToken, {
+      httpOnly: true,
+      secure: env.NODE_ENV === 'production',
+      sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    });
+  }
+
+
+  res.cookie('refreshToken', refreshToken, {
+    httpOnly: true,
+    secure: env.NODE_ENV === 'production',
+    sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+  });
+};
+
+const clearTokenCookies = (res) => {
+  res.clearCookie('accessToken');
+  res.clearCookie('refreshToken');
+};
+
+module.exports = {
+  hashPassword,
+  comparePassword,
+  generateTokens,
+  generatePartnerTokens,
+  setTokenCookies,
+  clearTokenCookies,
+};

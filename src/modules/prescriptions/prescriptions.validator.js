@@ -1,0 +1,29 @@
+const { z } = require('zod');
+
+const uploadSchema = z.object({
+  body: z.object({
+    order_id: z.string().optional()
+  })
+});
+
+const validatePrescriptionSchema = z.object({
+  params: z.object({
+    id: z.string().uuid()
+  }),
+  body: z.object({
+    status: z.enum(['verified', 'rejected']),
+    notes: z.string().max(1000).optional()
+  })
+});
+
+const readPrescriptionSchema = z.object({
+  body: z.object({
+    file_url: z.string().min(1, 'A valid prescription file URL is required'),
+  }),
+});
+
+module.exports = {
+  uploadSchema,
+  validatePrescriptionSchema,
+  readPrescriptionSchema,
+};
