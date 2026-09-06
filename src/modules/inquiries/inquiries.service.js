@@ -128,7 +128,7 @@ async function processPartnerRegistration(payload, inquiry) {
             data: { email, password: hashedPassword, role: 'vendor', is_active: true }
           });
         }
-        await prisma.vendor.create({
+        const newVendor = await prisma.vendor.create({
           data: {
             account_id: account.id,
             email: email,
@@ -141,6 +141,7 @@ async function processPartnerRegistration(payload, inquiry) {
             status: 'pending',
           }
         });
+        await inboxEvents.partnerApplication(newVendor).catch(() => {});
       }
     } catch (err) {
       console.error('Failed to auto-create Vendor record from partner inquiry:', err.message);

@@ -388,6 +388,9 @@ router.post('/vendors', catchAsync(async (req, res) => {
   await prisma.auditLog.create({
     data: { action: 'VENDOR_CREATED_PENDING_REVIEW', entity: 'vendor', entity_id: account.vendor.id, user_id: req.user.id }
   });
+
+  const inboxEvents = require('../notifications/inbox.events');
+  await inboxEvents.partnerApplication(account.vendor).catch(() => {});
   res.json({
     status: 'success',
     message: 'Vendor created and submitted for verification review.',

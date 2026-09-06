@@ -142,6 +142,19 @@ const createDoctor = async (payload, adminUserId = null) => {
     // Audit logging should not block doctor creation.
   }
 
+  try {
+    const inbox = require('../notifications/inbox.service');
+    await inbox.notifyAdmins({
+      type: 'doctor_created',
+      title: 'New Doctor Profile Onboarded',
+      message: `Dr. ${normalizedName} (${specialty || 'General Physician'}) profile created for verification review.`,
+      link: '/admin/doctors',
+      data: { doctor_id: doctor.id, email: normalizedEmail },
+    });
+  } catch {
+    // Inbox notification should not block doctor creation.
+  }
+
   return {
     ...doctor,
     email: account.email,

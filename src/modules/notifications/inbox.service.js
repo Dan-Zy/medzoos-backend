@@ -86,26 +86,25 @@ async function notify({
 
 async function notifyAdmins(payload) {
   try {
-    const admins = await prisma.user.findMany({
-      where: {
-        OR: [{ role: 'admin' }, { account: { role: 'admin' } }],
-      },
+    const adminAccounts = await prisma.account.findMany({
+      where: { role: 'admin' },
       select: { id: true },
-    });
+    }).catch(() => []);
 
-    if (!admins.length) {
-      return notify({
-        recipientType: 'admin',
-        recipientId: 'all',
-        ...payload,
-      });
-    }
+    const adminUsers = await prisma.user.findMany({
+      where: { role: 'admin' },
+      select: { id: true },
+    }).catch(() => []);
+
+    const recipientIds = new Set(['all']);
+    adminAccounts.forEach((a) => recipientIds.add(a.id));
+    adminUsers.forEach((u) => recipientIds.add(u.id));
 
     const results = await Promise.all(
-      admins.map((admin) =>
+      Array.from(recipientIds).map((id) =>
         notify({
           recipientType: 'admin',
-          recipientId: admin.id,
+          recipientId: id,
           ...payload,
         })
       )
