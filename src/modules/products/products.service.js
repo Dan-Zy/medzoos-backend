@@ -192,8 +192,10 @@ const listVendorProducts = async (vendorId, query = {}) => {
 
   const listingFilter = String(query.listing_status || '').toUpperCase();
   const stockFilter = String(query.stock_status || '').toUpperCase();
+  const isOutOfStockQuery = listingFilter === 'OUT_OF_STOCK' || stockFilter === 'OUT_OF_STOCK';
+  const isArchivedQuery = listingFilter === 'ARCHIVED';
 
-  if (listingFilter === 'OUT_OF_STOCK' || stockFilter === 'OUT_OF_STOCK') {
+  if (isOutOfStockQuery) {
     andConditions.push({
       OR: [
         { stock: { lte: 0 } },
@@ -234,7 +236,11 @@ const listVendorProducts = async (vendorId, query = {}) => {
 
   const where = {
     vendor_id: vendorId,
-    deleted_at: null,
+    ...(isArchivedQuery
+      ? { OR: [{ listing_status: 'ARCHIVED' }, { deleted_at: { not: null } }] }
+      : isOutOfStockQuery
+        ? {}
+        : { deleted_at: null }),
     ...(andConditions.length > 0 ? { AND: andConditions } : {}),
   };
 
