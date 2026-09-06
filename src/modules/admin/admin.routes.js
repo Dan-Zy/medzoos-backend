@@ -220,6 +220,7 @@ router.delete('/content/:id', cmsController.deleteItem);
 
 router.get('/vendors', catchAsync(async (req, res) => {
   const vendors = await prisma.vendor.findMany({
+    where: { status: { not: 'deleted' } },
     orderBy: { created_at: 'desc' },
     include: {
       account: { select: { email: true } },
@@ -623,30 +624,87 @@ router.patch('/vendors/:id/credentials', handleUpdateVendor);
 router.delete('/vendors/:id', catchAsync(async (req, res) => {
   const { id } = req.params;
 
-  try {
-    await prisma.vendor.delete({
-      where: { id }
+  const vendor = await prisma.vendor.findUnique({
+    where: { id },
+    select: { id: true, account_id: true, business_name: true, email: true }
+  });
+
+  if (!vendor) {
+    return res.status(404).json({ status: 'error', message: 'Pharmacy vendor not found' });
+  }
+
+  // Check if vendor has actual customer orders
+  const ordersCount = await prisma.order.count({
+    where: { vendor_id: id }
+  });
+
+  const prescriptionOrdersCount = await prisma.prescriptionOrder.count({
+    where: { OR: [{ current_vendor_id: id }, { assigned_vendor_id: id }] }
+  });
+
+  if (ordersCount > 0 || prescriptionOrdersCount > 0) {
+    // Soft-delete vendor to preserve historical customer orders
+    await prisma.vendor.update({
+      where: { id },
+      data: {
+        status: 'deleted',
+        is_open: false,
+        is_online: false,
+        email: vendor.email ? `deleted_${Date.now()}_${vendor.email}` : null,
+        account_id: null,
+      }
     });
+
+    if (vendor.account_id) {
+      await prisma.account.delete({ where: { id: vendor.account_id } }).catch(() => {});
+    }
 
     await prisma.auditLog.create({
       data: {
         action: 'VENDOR_DELETED',
         entity: 'vendor',
         entity_id: id,
-        user_id: req.user.id
+        user_id: req.user?.id || null
       }
-    });
+    }).catch(() => {});
 
-    res.json({ status: 'success', message: 'Vendor deleted successfully' });
-  } catch (error) {
-    if (error.code === 'P2003') {
-      return res.status(400).json({ 
-        status: 'error', 
-        message: 'Cannot delete vendor because they have associated products or orders. Please suspend them instead.' 
-      });
-    }
-    throw error;
+    return res.json({ status: 'success', message: 'Pharmacy vendor account removed successfully' });
   }
+
+  // No orders associated: clean up non-order child relations and hard delete
+  await prisma.$transaction(async (tx) => {
+    await tx.vendorDocumentReview.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.vendorDocument.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.vendorOperatingHour.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.vendorServiceArea.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.vendorNotification.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.vendorAuditLog.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.vendorStaff.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.vendorLoginActivity.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.inventoryReservation.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.inventoryBatch.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.productInventory.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.review.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.offer.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+    await tx.product.deleteMany({ where: { vendor_id: id } }).catch(() => {});
+
+    await tx.vendor.delete({ where: { id } });
+
+    if (vendor.account_id) {
+      await tx.account.delete({ where: { id: vendor.account_id } }).catch(() => {});
+    }
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      action: 'VENDOR_DELETED',
+      entity: 'vendor',
+      entity_id: id,
+      user_id: req.user?.id || null
+    }
+  }).catch(() => {});
+
+  res.json({ status: 'success', message: 'Pharmacy vendor deleted successfully' });
 }));
 
 router.post('/vendors/:id/documents/:documentId/review', catchAsync(async (req, res) => {
