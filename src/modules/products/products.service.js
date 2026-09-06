@@ -262,14 +262,21 @@ const updateProduct = async (id, vendorId, data) => {
   const sanitizedData = sanitizeProductPayload(data);
   await assertUniqueIdentifiers(vendorId, { ...product, ...sanitizedData }, id);
 
-  const submit = data.submit === true || data.approval_status === 'pending_review';
-  const shouldResubmitForReview =
-    submit || ['rejected', 'changes_requested', 'draft'].includes(product.approval_status);
+  const isControlledNow = sanitizedData.controlled_medicine !== undefined
+    ? Boolean(sanitizedData.controlled_medicine)
+    : Boolean(product.controlled_medicine);
 
-  const nextApproval = submit
-    ? 'pending_review'
-    : data.approval_status === 'draft'
-      ? 'draft'
+  const submit = data.submit === true || data.approval_status === 'pending_review';
+  const isDraft = data.save_as_draft === true || data.approval_status === 'draft';
+  const newlyControlled = isControlledNow && !product.controlled_medicine;
+
+  const shouldResubmitForReview =
+    submit || newlyControlled || ['rejected', 'changes_requested', 'draft'].includes(product.approval_status);
+
+  const nextApproval = isDraft
+    ? 'draft'
+    : (submit || (isControlledNow && product.approval_status !== 'approved'))
+      ? 'pending_review'
       : shouldResubmitForReview && product.approval_status === 'rejected'
         ? 'pending_review'
         : undefined;
