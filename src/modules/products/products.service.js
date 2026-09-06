@@ -330,20 +330,31 @@ const updateProduct = async (id, vendorId, data) => {
 };
 
 const setListingStatus = async (id, vendorId, listingStatus) => {
-  const product = await prisma.product.findFirst({ where: { id, vendor_id: vendorId, deleted_at: null } });
+  const normalized = String(listingStatus || '').toUpperCase();
+  const product = await prisma.product.findFirst({ where: { id, vendor_id: vendorId } });
   if (!product) throw new AppError('Product not found', 404);
+
   const updated = await prisma.product.update({
     where: { id },
-    data: { listing_status: String(listingStatus).toUpperCase() },
+    data: {
+      listing_status: normalized,
+      ...(normalized !== 'ARCHIVED' ? { deleted_at: null } : { deleted_at: new Date() }),
+    },
   });
+
   await recordAuditEntry({
     vendorId,
     userId: vendorId,
-    action: listingStatus === 'ACTIVE' ? 'PRODUCT_ACTIVATED' : 'PRODUCT_DEACTIVATED',
+    action: normalized === 'ACTIVE'
+      ? 'PRODUCT_ACTIVATED'
+      : normalized === 'ARCHIVED'
+        ? 'PRODUCT_ARCHIVED'
+        : 'PRODUCT_UNARCHIVED',
     entity: 'product',
     entityId: id,
     details: { listing_status: updated.listing_status },
   });
+
   return withComputed(updated);
 };
 
