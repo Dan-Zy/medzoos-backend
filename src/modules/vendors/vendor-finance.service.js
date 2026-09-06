@@ -123,11 +123,25 @@ async function getSalesReport(vendorId, query = {}) {
 }
 
 async function getPayoutOverview(vendorId) {
-  const [summary, payouts] = await Promise.all([
+  const [summary, payouts, completedOrders, pendingOrders] = await Promise.all([
     getVendorEarningsSummary(vendorId),
     prisma.payout.findMany({
       where: { vendor_id: vendorId },
       orderBy: { created_at: 'desc' },
+    }),
+    prisma.order.findMany({
+      where: {
+        vendor_id: vendorId,
+        status: { in: ['COMPLETED', 'DELIVERED', 'completed', 'delivered'] },
+      },
+      include: { vendor: { select: { commission_rate: true } } },
+    }),
+    prisma.order.findMany({
+      where: {
+        vendor_id: vendorId,
+        status: { in: ['NEW', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'OUT_FOR_DELIVERY', 'pending', 'processing', 'shipped'] },
+      },
+      include: { vendor: { select: { commission_rate: true } } },
     }),
   ]);
 
@@ -135,9 +149,41 @@ async function getPayoutOverview(vendorId) {
     .filter((payout) => ['PAID', 'completed', 'paid'].includes(payout.status))
     .reduce((sum, payout) => sum + Number(payout.net_amount || payout.amount || 0), 0);
 
+  const completedNetEarnings = completedOrders.reduce((sum, order) => {
+    const financials = calculateOrderFinancials({
+      subtotal: order.subtotal || order.total_amount,
+      discount: order.discount_amount,
+      deliveryFee: order.delivery_fee,
+      commissionRate: order.commission_amount
+        ? (Number(order.commission_amount) / Math.max(Number(order.total_amount) || 1, 1)) * 100
+        : order.vendor?.commission_rate,
+      refundAmount: order.refund_amount,
+    });
+    const net = Number(order.vendor_net || financials.vendorNet || 0);
+    return sum + net;
+  }, 0);
+
+  const pendingNetEarnings = pendingOrders.reduce((sum, order) => {
+    const financials = calculateOrderFinancials({
+      subtotal: order.subtotal || order.total_amount,
+      discount: order.discount_amount,
+      deliveryFee: order.delivery_fee,
+      commissionRate: order.commission_amount
+        ? (Number(order.commission_amount) / Math.max(Number(order.total_amount) || 1, 1)) * 100
+        : order.vendor?.commission_rate,
+      refundAmount: order.refund_amount,
+    });
+    const net = Number(order.vendor_net || financials.vendorNet || 0);
+    return sum + net;
+  }, 0);
+
+  const availableBalance = summary.totals.settled > 0
+    ? summary.totals.settled
+    : Math.max(0, completedNetEarnings - totalPaid);
+
   return {
-    available: summary.totals.settled || Math.max(0, summary.totals.net - totalPaid),
-    pending: summary.totals.pending,
+    available: availableBalance,
+    pending: pendingNetEarnings || summary.totals.pending,
     totalPaid,
     nextPayout: payouts.find((payout) => ['PENDING', 'pending', 'PROCESSING'].includes(payout.status)) || null,
     payouts,
@@ -149,6 +195,7 @@ async function getVendorEarningsSummary(vendorId) {
   const [transactions, settlements] = await Promise.all([
     prisma.vendorTransaction.findMany({
       where: { vendor_id: vendorId },
+      include: { order: { select: { status: true } } },
       orderBy: { created_at: 'desc' },
     }),
     prisma.vendorSettlement.findMany({
@@ -158,7 +205,13 @@ async function getVendorEarningsSummary(vendorId) {
     }),
   ]);
 
-  const totals = transactions.reduce(
+  const validTransactions = transactions.filter((tx) => {
+    if (!tx.order) return true;
+    const st = String(tx.order.status || '').toUpperCase();
+    return !['CANCELLED', 'REJECTED'].includes(st);
+  });
+
+  const totals = validTransactions.reduce(
     (acc, transaction) => {
       acc.gross += Number(transaction.gross_amount || 0);
       acc.commission += Number(transaction.commission_amount || 0);
@@ -172,7 +225,7 @@ async function getVendorEarningsSummary(vendorId) {
 
   return {
     totals,
-    recentTransactions: transactions.slice(0, 10),
+    recentTransactions: validTransactions.slice(0, 10),
     recentSettlements: settlements,
   };
 }

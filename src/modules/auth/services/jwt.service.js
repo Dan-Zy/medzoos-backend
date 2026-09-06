@@ -1,9 +1,9 @@
 const jwt = require('jsonwebtoken');
 const env = require('../../../config/env');
 
-const ACCESS_TOKEN_TTL = '24h';
-const REFRESH_TOKEN_TTL = '30d';
-const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const ACCESS_TOKEN_TTL = '7d';
+const REFRESH_TOKEN_TTL = '60d';
+const REFRESH_TOKEN_TTL_MS = 60 * 24 * 60 * 60 * 1000;
 
 
 function buildPayload(user) {

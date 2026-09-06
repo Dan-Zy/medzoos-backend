@@ -389,6 +389,31 @@ async function sendSecurityAlertEmail({ to, name, title = 'Security Alert', deta
   });
 }
 
+/**
+ * Sends a staff invitation email containing login credentials
+ */
+async function sendStaffInvitationEmail({ to, name, email, role, temporaryPassword, vendorName, loginUrl }) {
+  const recipientEmail = to || email;
+  if (!recipientEmail) return;
+
+  const html = templates.staffInvitationTemplate({
+    name,
+    email: recipientEmail,
+    role,
+    temporaryPassword,
+    vendorName,
+    loginUrl: loginUrl || `${env.VENDOR_PORTAL_URL || env.FRONTEND_URL || 'http://localhost:3004'}/vendor`,
+  });
+
+  return sendEmail({
+    to: recipientEmail,
+    subject: `You've been invited to join ${vendorName || 'Medzoos'} Staff Portal`,
+    html,
+    senderKey: 'DONOTREPLY',
+    senderAddress: EMAIL_CHANNELS.DONOTREPLY.address,
+  });
+}
+
 module.exports = {
   sendEmail,
   sendPasswordResetEmail,
@@ -403,6 +428,7 @@ module.exports = {
   sendContactInquiryEmails,
   sendFeedbackRequestEmail,
   sendSecurityAlertEmail,
+  sendStaffInvitationEmail,
   EMAIL_CHANNELS,
   resolveSender,
 };

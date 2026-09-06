@@ -16,11 +16,11 @@ const generateTokens = (user) => {
   if (user.accountId) payload.accountId = user.accountId;
 
   const accessToken = jwt.sign(payload, env.JWT_ACCESS_SECRET, {
-    expiresIn: '24h',
+    expiresIn: '7d',
   });
 
   const refreshToken = jwt.sign(payload, env.JWT_REFRESH_SECRET, {
-    expiresIn: '30d',
+    expiresIn: '60d',
   });
 
   return { accessToken, refreshToken };
@@ -38,7 +38,7 @@ const setTokenCookies = (res, accessToken, refreshToken, options = {}) => {
       httpOnly: true,
       secure: env.NODE_ENV === 'production',
       sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
   }
 
@@ -47,7 +47,7 @@ const setTokenCookies = (res, accessToken, refreshToken, options = {}) => {
     httpOnly: true,
     secure: env.NODE_ENV === 'production',
     sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    maxAge: 60 * 24 * 60 * 60 * 1000, // 60 days
   });
 };
 

@@ -13,6 +13,12 @@ const scheduleStockCheck = () => {
     });
 
     for (const product of lowStockProducts) {
+      const prefs = product.vendor?.notification_preferences;
+      if (prefs && typeof prefs === 'object') {
+        if (prefs.stock === false || prefs.email === false) {
+          continue;
+        }
+      }
       await notificationQueue.add('low-stock-alert', {
         channel: 'email',
         type: 'low-stock',

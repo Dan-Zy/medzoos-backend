@@ -43,7 +43,7 @@ const TRANSITIONS = {
   ACCEPTED: ['PREPARING', 'CANCELLED'],
   PREPARING: ['READY_FOR_PICKUP', 'CANCELLED'],
   READY_FOR_PICKUP: ['OUT_FOR_DELIVERY', 'CANCELLED'],
-  OUT_FOR_DELIVERY: ['DELIVERED'],
+  OUT_FOR_DELIVERY: ['DELIVERED', 'COMPLETED'],
   DELIVERED: ['COMPLETED', 'RETURN_REQUESTED'],
   COMPLETED: ['RETURN_REQUESTED'],
   RETURN_REQUESTED: ['RETURNED', 'REJECTED'],
@@ -118,10 +118,9 @@ function allowedActions(status) {
     case 'READY_FOR_PICKUP':
       return ['Hand to Rider', 'View Details'];
     case 'OUT_FOR_DELIVERY':
-      return ['View Details'];
+      return ['Mark Delivered', 'Complete Order', 'View Details'];
     case 'DELIVERED':
-    case 'COMPLETED':
-      return ['View Details'];
+      return ['Complete Order', 'View Details'];
     default:
       return ['View Details'];
   }

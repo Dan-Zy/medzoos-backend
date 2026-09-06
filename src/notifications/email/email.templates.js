@@ -526,6 +526,47 @@ function securityAlertTemplate({ title = 'Security Alert', name = '', details = 
   });
 }
 
+function staffInvitationTemplate({ name, email, role, temporaryPassword, vendorName, loginUrl }) {
+  const title = `Staff Invitation — ${vendorName || BRAND.name}`;
+  const preheader = `You've been invited as a ${role || 'Staff Member'} at ${vendorName || BRAND.name}`;
+  const greeting = name ? `Hello ${escapeHtml(name)},` : 'Hello,';
+  const roleTitle = String(role || 'STAFF').replace(/_/g, ' ').toUpperCase();
+
+  const bodyHtml = `
+    <p style="margin-top: 0;">${greeting}</p>
+    <p>You have been added as a <strong>${escapeHtml(roleTitle)}</strong> staff member for <strong>${escapeHtml(vendorName || 'Medzoos Pharmacy Partner')}</strong> on the ${BRAND.name} Portal.</p>
+
+    ${renderCallout(`
+      <strong style="font-size: 15px; display: block; margin-bottom: 8px;">Your Staff Account Credentials:</strong>
+      <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-size: 14px; line-height: 1.6;">
+        <tr>
+          <td style="padding: 4px 0; font-weight: bold; width: 140px;">Email Address:</td>
+          <td style="padding: 4px 0;">${escapeHtml(email)}</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 0; font-weight: bold;">Temporary Password:</td>
+          <td style="padding: 4px 0; font-family: monospace; font-size: 15px; color: ${BRAND.primary}; font-weight: bold;">${escapeHtml(temporaryPassword)}</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 0; font-weight: bold;">Assigned Role:</td>
+          <td style="padding: 4px 0;">${escapeHtml(roleTitle)}</td>
+        </tr>
+      </table>
+    `, 'info')}
+
+    <p style="margin-top: 20px;">Please click below to log into your staff portal using your temporary password. You may change your password after logging in:</p>
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="${escapeHtml(loginUrl)}" style="display: inline-block; padding: 12px 28px; background-color: ${BRAND.primary}; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px;">Log In to Staff Portal</a>
+    </div>
+  `;
+
+  return renderBaseTemplate({
+    title,
+    preheader,
+    bodyHtml,
+  });
+}
+
 module.exports = {
   BRAND,
   escapeHtml,
@@ -542,4 +583,5 @@ module.exports = {
   contactInquiryUserTemplate,
   feedbackRequestTemplate,
   securityAlertTemplate,
+  staffInvitationTemplate,
 };

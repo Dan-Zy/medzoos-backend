@@ -60,6 +60,25 @@ async function notify({
 }) {
   if (!recipientType || !recipientId || !title || !message) return null;
 
+  if (recipientType === 'vendor' && recipientId && recipientId !== 'all') {
+    const vendor = await prisma.vendor.findUnique({
+      where: { id: recipientId },
+      select: { notification_preferences: true },
+    }).catch(() => null);
+    const prefs = vendor?.notification_preferences;
+    if (prefs && typeof prefs === 'object') {
+      if (prefs.in_app === false) return null;
+      const t = String(type || '').toLowerCase();
+      let category = null;
+      if (t.includes('stock') || t.includes('expiry')) category = 'stock';
+      else if (t.includes('order')) category = 'orders';
+      else if (t.includes('prescription')) category = 'prescriptions';
+      else if (t.includes('payout')) category = 'payouts';
+
+      if (category && prefs[category] === false) return null;
+    }
+  }
+
   try {
     const notification = await prisma.inboxNotification.create({
       data: {
@@ -134,7 +153,28 @@ async function listInbox(role, userId, { take = 80 } = {}) {
     orderBy: { created_at: 'desc' },
     take,
   });
-  return notifications.map(serialize);
+
+  let items = notifications.map(serialize);
+  if (role === 'vendor' && userId) {
+    const vendor = await prisma.vendor.findUnique({
+      where: { id: userId },
+      select: { notification_preferences: true },
+    }).catch(() => null);
+    const prefs = vendor?.notification_preferences;
+    if (prefs && typeof prefs === 'object') {
+      if (prefs.in_app === false) return [];
+      items = items.filter((item) => {
+        const t = String(item.type || '').toLowerCase();
+        let category = null;
+        if (t.includes('stock') || t.includes('expiry')) category = 'stock';
+        else if (t.includes('order')) category = 'orders';
+        else if (t.includes('prescription')) category = 'prescriptions';
+        else if (t.includes('payout')) category = 'payouts';
+        return !category || prefs[category] !== false;
+      });
+    }
+  }
+  return items;
 }
 
 async function unreadCount(role, userId) {

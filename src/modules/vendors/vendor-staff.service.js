@@ -4,6 +4,9 @@ const AppError = require('../../utils/AppError');
 const { hashPassword } = require('../auth/auth.helper');
 const { recordAuditEntry } = require('./vendor-audit.service');
 const { STAFF_ROLES } = require('../pharmacy/catalog.constants');
+const { sendStaffInvitationEmail } = require('../../notifications/email/email.service');
+const { logger } = require('../../utils/logger');
+const env = require('../../config/env');
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
@@ -32,6 +35,11 @@ async function inviteStaff(vendorId, data, performedBy) {
 
   const tempPassword = data.password || `Mz${crypto.randomBytes(4).toString('hex')}!`;
   const hashed = await hashPassword(tempPassword);
+
+  const vendor = await prisma.vendor.findUnique({
+    where: { id: vendorId },
+    select: { business_name: true, name: true },
+  });
 
   const staff = await prisma.$transaction(async (tx) => {
     let account = await tx.account.findUnique({ where: { email } });
@@ -70,6 +78,24 @@ async function inviteStaff(vendorId, data, performedBy) {
     entityId: staff.id,
     details: { email, role },
   });
+
+  const vendorName = vendor?.business_name || vendor?.name || 'Medzoos Pharmacy Partner';
+  const loginUrl = env.VENDOR_PORTAL_URL || `${env.FRONTEND_URL || 'http://localhost:3004'}/vendor`;
+
+  try {
+    await sendStaffInvitationEmail({
+      to: email,
+      name: data.name,
+      email,
+      role,
+      temporaryPassword: tempPassword,
+      vendorName,
+      loginUrl,
+    });
+    logger.info(`Staff invitation email successfully sent to ${email}`);
+  } catch (emailErr) {
+    logger.warn(`Failed to send staff invitation email to ${email}: ${emailErr.message}`);
+  }
 
   return { staff, temporary_password: tempPassword };
 }
