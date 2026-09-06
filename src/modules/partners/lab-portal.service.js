@@ -49,17 +49,53 @@ const updatePassword = async (labId, currentPassword, newPassword) => {
     throw new AppError('New password must contain at least one special character', 400);
   }
 
-  const lab = await prisma.labPartner.findUnique({ where: { id: labId } });
-  if (!lab) throw new AppError('Lab partner not found', 404);
+  let lab = await prisma.labPartner.findFirst({
+    where: {
+      OR: [{ id: labId }, { account_id: labId }],
+    },
+    include: { account: true },
+  });
+
+  let account = lab?.account || null;
+
+  if (!account && labId) {
+    account = await prisma.account.findUnique({ where: { id: labId } });
+    if (account && !lab) {
+      lab = await prisma.labPartner.findFirst({
+        where: {
+          OR: [
+            { account_id: account.id },
+            { email: { equals: account.email, mode: 'insensitive' } },
+          ],
+        },
+      });
+    }
+  }
+
+  const storedPassword = account?.password || lab?.password;
+  if (!storedPassword) {
+    throw new AppError('Unable to verify current password', 400);
+  }
 
   const { comparePassword, hashPassword } = require('../auth/auth.helper');
-  const match = await comparePassword(currentPassword, lab.password);
+  const match = await comparePassword(currentPassword, storedPassword);
   if (!match) throw new AppError('Current password is incorrect', 400);
 
-  await prisma.labPartner.update({
-    where: { id: labId },
-    data: { password: await hashPassword(newPassword) },
-  });
+  const hashed = await hashPassword(newPassword);
+
+  if (account) {
+    await prisma.account.update({
+      where: { id: account.id },
+      data: { password: hashed },
+    });
+  }
+
+  if (lab) {
+    await prisma.labPartner.update({
+      where: { id: lab.id },
+      data: { password: hashed },
+    });
+  }
 };
 
 const getBookings = async (labId) => labTestsService.getLabBookings(labId);
@@ -90,8 +126,10 @@ const getTests = async (labId) => {
     where: {
       OR: [
         { lab_partner_id: actualLabId },
+        { lab_partner_id: null },
         ...(labName ? [{ lab: { equals: labName, mode: 'insensitive' } }] : []),
       ],
+      is_active: true,
     },
     orderBy: { name: 'asc' },
   });

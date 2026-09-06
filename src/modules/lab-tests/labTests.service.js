@@ -500,16 +500,45 @@ const normalizeBookingStatus = (status = '') => {
   return s;
 };
 
+const findLabBooking = async (labPartnerId, bookingId) => {
+  let booking = await prisma.labTestBooking.findFirst({
+    where: {
+      OR: [
+        { id: bookingId },
+        { booking_number: bookingId },
+      ],
+      ...(labPartnerId ? {
+        OR: [
+          { lab_partner_id: labPartnerId },
+          { lab_partner: { account_id: labPartnerId } },
+        ],
+      } : {}),
+    },
+    include: bookingInclude,
+  });
+
+  if (!booking) {
+    booking = await prisma.labTestBooking.findFirst({
+      where: {
+        OR: [
+          { id: bookingId },
+          { booking_number: bookingId },
+        ],
+      },
+      include: bookingInclude,
+    });
+  }
+
+  return booking;
+};
+
 const updateBookingStatus = async (labPartnerId, bookingId, rawStatus, note) => {
   const status = normalizeBookingStatus(rawStatus);
   if (!BOOKING_STATUSES.includes(status)) {
     throw new AppError(`Invalid status: ${rawStatus}. Allowed: ${BOOKING_STATUSES.join(', ')}`, 400);
   }
 
-  const booking = await prisma.labTestBooking.findFirst({
-    where: { id: bookingId, lab_partner_id: labPartnerId },
-    include: { lab_test: true },
-  });
+  const booking = await findLabBooking(labPartnerId, bookingId);
   if (!booking) throw new AppError('Booking not found', 404);
 
   const updateData = {
@@ -565,35 +594,7 @@ const updateBookingStatus = async (labPartnerId, bookingId, rawStatus, note) => 
 };
 
 const markPaymentReceived = async (labPartnerId, bookingId) => {
-  // Support multi-identifier and flexible lab lookup
-  let booking = await prisma.labTestBooking.findFirst({
-    where: {
-      OR: [
-        { id: bookingId },
-        { booking_number: bookingId },
-      ],
-      ...(labPartnerId ? {
-        OR: [
-          { lab_partner_id: labPartnerId },
-          { lab_partner: { account_id: labPartnerId } },
-        ],
-      } : {}),
-    },
-    include: bookingInclude,
-  });
-
-  if (!booking) {
-    booking = await prisma.labTestBooking.findFirst({
-      where: {
-        OR: [
-          { id: bookingId },
-          { booking_number: bookingId },
-        ],
-      },
-      include: bookingInclude,
-    });
-  }
-
+  const booking = await findLabBooking(labPartnerId, bookingId);
   if (!booking) throw new AppError('Booking not found', 404);
 
   if (String(booking.payment_status).toLowerCase() === 'paid') {
@@ -623,16 +624,14 @@ const uploadReport = async (labPartnerId, bookingId, reportUrl) => {
     throw new AppError('Report URL is required', 400);
   }
 
-  const booking = await prisma.labTestBooking.findFirst({
-    where: { id: bookingId, lab_partner_id: labPartnerId },
-  });
+  const booking = await findLabBooking(labPartnerId, bookingId);
   if (!booking) throw new AppError('Booking not found', 404);
   if (['cancelled', 'rejected'].includes(booking.status)) {
     throw new AppError('Cannot upload report for cancelled booking', 400);
   }
 
   const updated = await prisma.labTestBooking.update({
-    where: { id: bookingId },
+    where: { id: booking.id },
     data: {
       report_url: String(reportUrl).trim(),
       status: 'report_uploaded',
@@ -649,13 +648,11 @@ const assignCollector = async (labPartnerId, bookingId, payload = {}) => {
   const collector_phone = payload.collector_phone || payload.phone || '';
   const note = payload.note || payload.notes;
 
-  const booking = await prisma.labTestBooking.findFirst({
-    where: { id: bookingId, lab_partner_id: labPartnerId },
-  });
+  const booking = await findLabBooking(labPartnerId, bookingId);
   if (!booking) throw new AppError('Booking not found', 404);
 
   const updated = await prisma.labTestBooking.update({
-    where: { id: bookingId },
+    where: { id: booking.id },
     data: {
       collector_name,
       collector_phone,
