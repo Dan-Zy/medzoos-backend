@@ -89,6 +89,8 @@ const createDoctor = async (payload, adminUserId = null) => {
           }))
         : DEFAULT_WEEKLY_SCHEDULE;
 
+      const doctorPhotoUrl = payload.photo_url || payload.image_url || payload.avatar || payload.image || null;
+
       const createdDoctor = await tx.doctor.create({
         data: {
           account_id: createdAccount.id,
@@ -100,6 +102,7 @@ const createDoctor = async (payload, adminUserId = null) => {
           is_active: true,
           hospital_id: linkedHospitalId,
           hospital: hospitalName,
+          photo_url: doctorPhotoUrl,
           languages: [],
           qualifications: [],
           slots: customSchedule,
@@ -221,7 +224,8 @@ const updateDoctor = async (id, payload, adminUserId = null) => {
   if (specialty !== undefined) doctorUpdateData.specialty = specialty.trim();
   if (experience_years !== undefined) doctorUpdateData.experience_years = parseInteger(experience_years);
   if (fee !== undefined) doctorUpdateData.fee = parseMoney(fee);
-  if (photo_url !== undefined) doctorUpdateData.photo_url = photo_url || null;
+  const targetPhotoUrl = photo_url !== undefined ? photo_url : (payload.image_url || payload.avatar || payload.image);
+  if (targetPhotoUrl !== undefined) doctorUpdateData.photo_url = targetPhotoUrl || null;
   if (phone !== undefined) doctorUpdateData.phone = phone ? phone.trim() : null;
   if (about !== undefined) doctorUpdateData.about = about ? about.trim() : null;
   if (languages !== undefined) doctorUpdateData.languages = Array.isArray(languages) ? languages : [];

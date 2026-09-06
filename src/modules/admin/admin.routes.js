@@ -792,6 +792,7 @@ router.get('/doctors', catchAsync(async (req, res) => {
     is_active: doctor.is_active,
     hospital_id: doctor.hospital_id,
     hospital: doctor.hospital_ref?.name || doctor.hospital,
+    photo_url: doctor.photo_url || null,
     created_at: doctor.created_at,
   }));
 
