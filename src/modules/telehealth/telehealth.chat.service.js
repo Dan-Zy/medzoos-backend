@@ -144,6 +144,22 @@ const sendMessage = async (user, appointmentId, payload) => {
     },
   });
 
+  if (payload.attachment_url) {
+    try {
+      const visitDocumentsService = require('../visit-documents/visitDocuments.service');
+      await visitDocumentsService.linkFromChatAttachment({
+        appointmentId,
+        actor: user,
+        attachmentUrl: payload.attachment_url,
+        messageType: payload.message_type,
+        chatMessageId: saved.id,
+        fileName: payload.file_name || null,
+      });
+    } catch (err) {
+      console.error('visit document link from chat failed', err.message);
+    }
+  }
+
   const formatted = formatMessage(saved);
 
   try {

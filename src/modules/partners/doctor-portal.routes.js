@@ -26,4 +26,22 @@ router.get('/appointments/:id/consultation', doctorPortalController.getConsultat
 router.patch('/appointments/:id/consultation', doctorPortalController.updateConsultation);
 router.post('/lab-orders', doctorPortalController.orderLabTest);
 
+router.put('/consultations/:id/follow-up', doctorPortalController.upsertConsultationFollowUp);
+router.get('/follow-ups', doctorPortalController.listFollowUps);
+router.get('/follow-ups/:id', doctorPortalController.getFollowUp);
+router.post('/follow-ups/:id/remind', doctorPortalController.remindFollowUp);
+router.post('/follow-ups/:id/cancel', doctorPortalController.cancelFollowUp);
+
+router.get('/appointments/:appointmentId/documents', doctorPortalController.listVisitDocuments);
+router.post('/appointments/:appointmentId/documents', doctorPortalController.createVisitDocument);
+router.delete(
+  '/appointments/:appointmentId/documents/:documentId',
+  doctorPortalController.removeVisitDocument,
+);
+router.post('/appointments/:id/mark-paid', doctorPortalController.markAppointmentPaid);
+router.get(
+  '/appointments/:appointmentId/shared-history',
+  doctorPortalController.getAppointmentSharedHistory,
+);
+
 module.exports = router;

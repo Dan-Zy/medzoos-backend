@@ -463,6 +463,7 @@ async function main() {
 
   if (prisma.inventoryReservation) await prisma.inventoryReservation.deleteMany({});
   if (prisma.cartItem) await prisma.cartItem.deleteMany({});
+  if (prisma.orderTransaction) await prisma.orderTransaction.deleteMany({});
   await prisma.orderItem.deleteMany({});
   await prisma.order.deleteMany({});
   await prisma.product.deleteMany({});

@@ -5,6 +5,16 @@ const { logger } = require('../../utils/logger');
 const env = require('../../config/env');
 
 function statusLabel(status) {
+  const map = {
+    pending: 'Pending',
+    confirmed: 'Confirmed',
+    checked_in: 'Checked In',
+    in_progress: 'In Progress',
+    completed: 'Completed',
+    cancelled: 'Cancelled',
+    no_show: 'Missed',
+  };
+  if (map[status]) return map[status];
   return String(status || '')
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
@@ -230,13 +240,16 @@ async function appointmentBooked({ appointment, doctorName, customerName }) {
 
 async function appointmentStatus({ appointment, status, doctorName }) {
   const label = statusLabel(status);
+  const isMissed = status === 'no_show';
   if (appointment.customer_id) {
     await inbox.notify({
       recipientType: 'customer',
       recipientId: appointment.customer_id,
       type: `appointment_${status}`,
-      title: `Appointment ${label.toLowerCase()}`,
-      message: `Your appointment with ${doctorName || 'the doctor'} is now ${label.toLowerCase()}.`,
+      title: isMissed ? 'Missed appointment' : `Appointment ${label.toLowerCase()}`,
+      message: isMissed
+        ? `Your appointment with ${doctorName || 'the doctor'} was marked as missed. If a follow-up was recommended, you can choose a new time.`
+        : `Your appointment with ${doctorName || 'the doctor'} is now ${label.toLowerCase()}.`,
       link: '/account/appointments',
       data: { appointmentId: appointment.id, status },
     });
@@ -502,6 +515,19 @@ async function productSubmittedForReview({ product, vendorName }) {
   });
 }
 
+async function followUpNeedsRebooking({ followUp, doctorName }) {
+  if (!followUp?.patient_id) return;
+  await inbox.notify({
+    recipientType: 'customer',
+    recipientId: followUp.patient_id,
+    type: 'follow_up_needs_rebooking',
+    title: 'Follow-up needs rebooking',
+    message: `Your follow-up with ${doctorName || 'your doctor'} was cancelled or missed. The recommendation is still active — choose a new time.`,
+    link: '/account/appointments?tab=follow-ups',
+    data: { followUpId: followUp.id },
+  });
+}
+
 module.exports = {
   contactInquiry,
   partnerApplication,
@@ -520,4 +546,5 @@ module.exports = {
   returnResolved,
   chatMessage,
   productSubmittedForReview,
+  followUpNeedsRebooking,
 };

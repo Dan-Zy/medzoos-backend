@@ -5,6 +5,7 @@ const {
   practiceLocationInclude,
   normalizeLocationSchedule,
 } = require('../../utils/practice-locations.utils');
+const { normalizeTimeRange } = require('../../utils/telehealth.utils');
 
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DEFAULT_SLOT = '09:00 AM - 01:00 PM';
@@ -167,10 +168,10 @@ const updatePracticeLocation = async (doctorId, locationId, payload) => {
 };
 
 const deletePracticeLocation = async (doctorId, locationId) => {
-  await ensureDoctorExists(doctorId);
+  const doctor = await ensureDoctorExists(doctorId);
 
   const existing = await prisma.doctorPracticeLocation.findFirst({
-    where: { id: locationId, doctor_id: doctorId },
+    where: { id: locationId, doctor_id: doctor.id },
   });
   if (!existing) throw new AppError('Practice location not found', 404);
 

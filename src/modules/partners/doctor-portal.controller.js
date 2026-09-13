@@ -27,10 +27,27 @@ const updateAppointmentStatus = catchAsync(async (req, res) => {
     req.user.id,
     req.params.id,
     req.body.status,
-    req.body.notes
+    req.body.notes,
+    {
+      no_show_reason: req.body.no_show_reason || req.body.reason || null,
+    }
   );
   sendResponse(res, 200, { appointment }, 'Appointment updated');
 });
+
+const markAppointmentPaid = catchAsync(async (req, res) => {
+  const appointment = await doctorPortalService.markAppointmentPaid(req.user.id, req.params.id);
+  sendResponse(res, 200, { appointment }, 'Payment marked as paid');
+});
+
+const visitDocumentsController = require('../visit-documents/visitDocuments.controller');
+
+const listVisitDocuments = visitDocumentsController.listDoctorDocuments;
+const createVisitDocument = visitDocumentsController.createDoctorDocument;
+const removeVisitDocument = visitDocumentsController.removeDoctorDocument;
+
+const recordSharesController = require('../record-shares/recordShares.controller');
+const getAppointmentSharedHistory = recordSharesController.getDoctorAppointmentSharedHistory;
 
 const getSchedule = catchAsync(async (req, res) => {
   const schedule = await doctorPortalService.getSchedule(req.user.id);
@@ -118,12 +135,15 @@ const deletePracticeLocation = catchAsync(async (req, res) => {
   sendResponse(res, 200, result, 'Practice location removed');
 });
 
+const followUpsController = require('../follow-ups/followUps.controller');
+
 module.exports = {
   getProfile,
   updateProfile,
   updatePassword,
   getAppointments,
   updateAppointmentStatus,
+  markAppointmentPaid,
   getSchedule,
   updateSchedule,
   getPatients,
@@ -139,4 +159,13 @@ module.exports = {
   createPracticeLocation,
   updatePracticeLocation,
   deletePracticeLocation,
+  upsertConsultationFollowUp: followUpsController.upsertConsultationFollowUp,
+  listFollowUps: followUpsController.listDoctorFollowUps,
+  getFollowUp: followUpsController.getDoctorFollowUp,
+  remindFollowUp: followUpsController.remindFollowUp,
+  cancelFollowUp: followUpsController.cancelFollowUp,
+  listVisitDocuments,
+  createVisitDocument,
+  removeVisitDocument,
+  getAppointmentSharedHistory,
 };

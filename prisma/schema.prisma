@@ -64,7 +64,9 @@ model User {
   doctor_prescriptions DoctorPrescription[]
   medical_documents    MedicalDocument[]
   record_shares        RecordShare[]
+  visit_documents      VisitDocument[]
   inventory_reservations InventoryReservation[]
+  follow_ups          FollowUp[]
   offer_redemptions      OfferRedemption[]
 
   community_posts          CommunityPost[]
@@ -895,6 +897,8 @@ model Doctor {
   consultations    Consultation[]
   prescriptions    DoctorPrescription[]
   lab_orders       LabTestBooking[]
+  follow_ups       FollowUp[]
+  visit_documents  VisitDocument[]
 
   @@map("doctors")
 }
@@ -971,8 +975,10 @@ model DoctorAppointment {
   appointment_date   DateTime
   fee                Float
   status             String   @default("pending")
-  payment_method     String?
-  payment_status     String   @default("pending")
+  payment_method     String?  // stripe | pay_at_clinic (legacy: cod)
+  payment_status     String   @default("pending") // pending | paid | pay_at_clinic | failed | refunded | partially_refunded
+  paid_at            DateTime?
+  paid_by            String?
   reason             String?
   preferred_consultation_mode String?
   consultation_mode  String?
@@ -981,20 +987,37 @@ model DoctorAppointment {
   meeting_id         String?  @unique
   meeting_url        String?
   consultation_notes String?
+  appointment_type   String   @default("new") // new | follow_up
+  parent_appointment_id String?
+  checked_in_at      DateTime?
+  checked_in_by      String?
+  no_show_at         DateTime?
+  no_show_marked_by  String?
+  no_show_reason     String?
+  rescheduled_at     DateTime?
+  rescheduled_by     String?
   created_at         DateTime @default(now())
   updated_at         DateTime @updatedAt
 
   doctor             Doctor              @relation(fields: [doctor_id], references: [id])
   customer           User                @relation(fields: [customer_id], references: [id])
   relationship       DoctorPatientRelationship? @relation(fields: [relationship_id], references: [id])
+  parent_appointment DoctorAppointment?  @relation("AppointmentFollowUpChain", fields: [parent_appointment_id], references: [id])
+  child_appointments DoctorAppointment[] @relation("AppointmentFollowUpChain")
+  booked_from_follow_up FollowUp?        @relation("BookedFollowUpAppointment")
+  source_follow_ups  FollowUp[]          @relation("FollowUpParentAppointment")
   prescription       DoctorPrescription?
   review             DoctorReview?
   chat               AppointmentChat?
   consultation       Consultation?
   record_share       RecordShare?
+  record_share_grants RecordShareGrant[]
+  visit_documents    VisitDocument[]
   lab_orders         LabTestBooking[]
 
   @@index([relationship_id])
+  @@index([parent_appointment_id])
+  @@index([appointment_type, status])
   @@map("doctor_appointments")
 }
 
@@ -1531,10 +1554,48 @@ model Consultation {
   patient       User                      @relation(fields: [patient_id], references: [id])
   prescriptions DoctorPrescription[]
   lab_orders    LabTestBooking[]
+  follow_up     FollowUp?
+  visit_documents VisitDocument[]
 
   @@index([doctor_id, patient_id])
   @@index([relationship_id])
   @@map("consultations")
+}
+
+/// Care recommendation after a consultation (not a booked visit).
+model FollowUp {
+  id                      String    @id @default(uuid())
+  patient_id              String
+  doctor_id               String
+  consultation_id         String    @unique
+  parent_appointment_id   String?
+  recommended_date        DateTime  @db.Date
+  booking_window_start    DateTime  @db.Date
+  booking_window_end      DateTime  @db.Date
+  reason                  String?
+  notes                   String?
+  preferred_mode          String    @default("either") // online | in_person | either (legacy: in_clinic)
+  priority                String    @default("routine") // routine | important | urgent
+  status                  String    @default("planned")
+  // planned | notified | booked | needs_rebooking | completed | overdue | declined | cancelled
+  booked_appointment_id   String?   @unique
+  notified_at             DateTime?
+  reminded_at             DateTime?
+  booked_at               DateTime?
+  completed_at            DateTime?
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
+
+  patient             User              @relation(fields: [patient_id], references: [id], onDelete: Cascade)
+  doctor              Doctor            @relation(fields: [doctor_id], references: [id], onDelete: Cascade)
+  consultation        Consultation      @relation(fields: [consultation_id], references: [id], onDelete: Cascade)
+  parent_appointment  DoctorAppointment? @relation("FollowUpParentAppointment", fields: [parent_appointment_id], references: [id])
+  booked_appointment  DoctorAppointment? @relation("BookedFollowUpAppointment", fields: [booked_appointment_id], references: [id])
+
+  @@index([patient_id, status])
+  @@index([doctor_id, status])
+  @@index([booking_window_end, status])
+  @@map("follow_ups")
 }
 
 model RecordShare {
@@ -1542,6 +1603,8 @@ model RecordShare {
   appointment_id      String   @unique
   patient_id          String
   doctor_id           String
+  // Legacy category flags — temporary backward compatibility only.
+  // New bookings should prefer RecordShareGrant rows.
   share_prescriptions Boolean  @default(true)
   share_lab_reports   Boolean  @default(true)
   share_medicines     Boolean  @default(true)
@@ -1551,9 +1614,71 @@ model RecordShare {
 
   appointment DoctorAppointment @relation(fields: [appointment_id], references: [id], onDelete: Cascade)
   patient     User              @relation(fields: [patient_id], references: [id], onDelete: Cascade)
+  grants      RecordShareGrant[]
 
   @@index([doctor_id, patient_id])
   @@map("record_shares")
+}
+
+/// Explicit per-appointment record grants (MVP sharing model).
+model RecordShareGrant {
+  id               String    @id @default(uuid())
+  appointment_id   String
+  patient_id       String
+  doctor_id        String
+  record_share_id  String?
+  record_type      String    // visit_summary | prescription | lab_report | medical_document | visit_document
+  record_id        String
+  shared_at        DateTime  @default(now())
+  revoked_at       DateTime?
+  revoked_by       String?
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+
+  appointment  DoctorAppointment @relation(fields: [appointment_id], references: [id], onDelete: Cascade)
+  record_share RecordShare?      @relation(fields: [record_share_id], references: [id], onDelete: SetNull)
+
+  @@unique([appointment_id, record_type, record_id])
+  @@index([doctor_id, patient_id, appointment_id])
+  @@index([appointment_id, revoked_at])
+  @@index([patient_id, revoked_at])
+  @@map("record_share_grants")
+}
+
+/// Appointment-scoped medical file (links existing URLs; does not duplicate storage).
+model VisitDocument {
+  id                    String   @id @default(uuid())
+  appointment_id        String
+  consultation_id       String?
+  patient_id            String
+  doctor_id             String
+  uploaded_by_type      String   // patient | doctor | staff
+  uploaded_by_id        String
+  document_type         String   // lab_report | imaging | previous_prescription | referral | medical_report | discharge_summary | other
+  source                String   // direct_upload | chat | medical_vault | doctor_upload
+  file_name             String?
+  file_url              String
+  mime_type             String?
+  file_size             Int?
+  title                 String?
+  description           String?
+  status                String   @default("active") // active | removed
+  chat_message_id       String?
+  medical_document_id   String?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  appointment       DoctorAppointment @relation(fields: [appointment_id], references: [id], onDelete: Cascade)
+  consultation      Consultation?     @relation(fields: [consultation_id], references: [id], onDelete: SetNull)
+  patient           User              @relation(fields: [patient_id], references: [id], onDelete: Cascade)
+  doctor            Doctor            @relation(fields: [doctor_id], references: [id], onDelete: Cascade)
+  medical_document  MedicalDocument?  @relation(fields: [medical_document_id], references: [id], onDelete: SetNull)
+
+  @@index([appointment_id, status])
+  @@index([patient_id, status])
+  @@index([doctor_id, status])
+  @@index([chat_message_id])
+  @@map("visit_documents")
 }
 
 model MedicalDocument {
@@ -1570,7 +1695,8 @@ model MedicalDocument {
   created_at     DateTime  @default(now())
   updated_at     DateTime  @updatedAt
 
-  patient User @relation(fields: [patient_id], references: [id], onDelete: Cascade)
+  patient         User            @relation(fields: [patient_id], references: [id], onDelete: Cascade)
+  visit_documents VisitDocument[]
 
   @@index([patient_id, document_type])
   @@map("medical_documents")

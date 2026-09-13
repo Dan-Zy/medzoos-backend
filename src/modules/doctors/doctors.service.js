@@ -11,6 +11,7 @@ const {
   getSlotAvailabilityForDate,
   canJoinVideo,
   resolvePaymentStatus,
+  normalizePaymentMethod,
   assertStatusTransition,
 } = require('../../utils/telehealth.utils');
 const { notifyAppointmentBooked } = require('../../utils/telehealth.notifications');
@@ -237,14 +238,15 @@ const bookAppointment = async (customerId, data) => {
   const isOnline = data.preferred_consultation_mode === 'online';
 
   // Online video consults have no cash handoff — Stripe only
-  const paymentMethod = String(data.payment_method || '').toLowerCase();
-  if (isOnline && (paymentMethod === 'cod' || !paymentMethod)) {
+  const paymentMethodRaw = String(data.payment_method || '').toLowerCase();
+  const paymentMethod = normalizePaymentMethod(paymentMethodRaw) || paymentMethodRaw;
+  if (isOnline && (paymentMethod === 'pay_at_clinic' || paymentMethodRaw === 'cod' || !paymentMethod)) {
     throw new AppError(
       'Online consultations require card payment. Cash is only available for in-clinic visits.',
       400
     );
   }
-  if (isOnline && !['stripe', 'card', 'online'].includes(paymentMethod)) {
+  if (isOnline && paymentMethod !== 'stripe') {
     throw new AppError('Online consultations require Stripe payment', 400);
   }
 
@@ -312,8 +314,8 @@ const bookAppointment = async (customerId, data) => {
         appointment_date: appointmentDate,
         fee,
         hospital_id: hospitalId,
-        payment_method: data.payment_method,
-        payment_status: resolvePaymentStatus(data.payment_method),
+        payment_method: paymentMethod || data.payment_method,
+        payment_status: resolvePaymentStatus(paymentMethod || data.payment_method),
         reason: data.reason || null,
         preferred_consultation_mode: data.preferred_consultation_mode || null,
         status: 'pending',
@@ -335,7 +337,11 @@ const bookAppointment = async (customerId, data) => {
   });
 
   try {
-    await clinicalService.onAppointmentCreated(appointment, data.share_records);
+    await clinicalService.onAppointmentCreated(
+      appointment,
+      data.share_records,
+      data.share_grants || data.shareGrants || null,
+    );
   } catch (err) {
     console.error('clinical onAppointmentCreated failed', err.message);
   }

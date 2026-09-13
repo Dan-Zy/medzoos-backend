@@ -225,6 +225,7 @@ const generateMeetingRoom = (appointmentId) => {
 };
 
 const assertStatusTransition = (currentStatus, nextStatus) => {
+  if (currentStatus === nextStatus) return; // idempotent: no-op same status
   const allowed = VALID_TRANSITIONS[currentStatus] || [];
   if (!allowed.includes(nextStatus)) {
     const AppError = require('./AppError');
@@ -234,11 +235,27 @@ const assertStatusTransition = (currentStatus, nextStatus) => {
 
 const resolvePaymentStatus = (paymentMethod) => {
   const method = String(paymentMethod || '').toLowerCase();
-  // COD and online (Stripe) both start pending — Stripe marks paid after verify
-  if (!method || method === 'cod' || method === 'stripe' || method === 'card' || method === 'online') {
+  // Clinic cash: explicit pay-at-clinic (legacy "cod" still accepted)
+  if (method === 'cod' || method === 'pay_at_clinic' || method === 'cash') {
+    return 'pay_at_clinic';
+  }
+  // Stripe / card start pending until verify marks paid
+  if (!method || method === 'stripe' || method === 'card' || method === 'online') {
     return 'pending';
   }
   return 'pending';
+};
+
+/** Normalize payment method for storage while accepting legacy "cod". */
+const normalizePaymentMethod = (paymentMethod) => {
+  const method = String(paymentMethod || '').toLowerCase();
+  if (method === 'cod' || method === 'pay_at_clinic' || method === 'cash') {
+    return 'pay_at_clinic';
+  }
+  if (method === 'card' || method === 'online' || method === 'stripe') {
+    return 'stripe';
+  }
+  return method || null;
 };
 
 const CHAT_OPEN_HOURS_BEFORE = 24;
@@ -397,6 +414,7 @@ module.exports = {
   generateMeetingRoom,
   assertStatusTransition,
   resolvePaymentStatus,
+  normalizePaymentMethod,
   expandRangeToSlots,
   getAppointmentDateTime,
   getChatWindow,

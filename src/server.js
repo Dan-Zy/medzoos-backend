@@ -18,6 +18,12 @@ ensureAuthSchema()
     logger.warn(`Auth schema bootstrap failed: ${err.message}`);
   })
   .finally(() => {
+    try {
+      const { initJobs } = require('./jobs');
+      initJobs();
+    } catch (err) {
+      logger.warn(`Jobs bootstrap failed: ${err.message}`);
+    }
     server.listen(PORT, '0.0.0.0', () => {
       logger.info(`Server running on port ${PORT} in ${config.env.NODE_ENV} mode`);
     });

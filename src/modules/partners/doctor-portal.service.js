@@ -152,7 +152,7 @@ const getAppointments = async (doctorId) => {
   }
 };
 
-const updateAppointmentStatus = async (doctorId, appointmentId, status, notes) => {
+const updateAppointmentStatus = async (doctorId, appointmentId, status, notes, options = {}) => {
   const appointment = await prisma.doctorAppointment.findFirst({
     where: { id: appointmentId, doctor_id: doctorId },
     include: {
@@ -162,10 +162,51 @@ const updateAppointmentStatus = async (doctorId, appointmentId, status, notes) =
   });
   if (!appointment) throw new AppError('Appointment not found', 404);
 
+  // Already at target status — skip transition side-effects (e.g. completed → completed)
+  if (appointment.status === status) {
+    if (notes !== undefined) {
+      return prisma.doctorAppointment.update({
+        where: { id: appointmentId },
+        data: { consultation_notes: notes },
+        include: appointmentInclude,
+      });
+    }
+    return prisma.doctorAppointment.findFirst({
+      where: { id: appointmentId, doctor_id: doctorId },
+      include: appointmentInclude,
+    });
+  }
+
   assertStatusTransition(appointment.status, status);
+
+  const mode = String(
+    appointment.consultation_mode || appointment.preferred_consultation_mode || '',
+  ).toLowerCase();
+  const isInPerson = mode === 'in_person' || mode === 'in_clinic';
+
+  if (status === 'checked_in') {
+    if (!isInPerson) {
+      throw new AppError('Check-in is only available for in-clinic appointments', 400);
+    }
+  }
 
   const updateData = { status };
   if (notes !== undefined) updateData.consultation_notes = notes;
+
+  if (status === 'checked_in') {
+    updateData.checked_in_at = new Date();
+    updateData.checked_in_by = doctorId;
+  }
+
+  if (status === 'no_show') {
+    updateData.no_show_at = new Date();
+    updateData.no_show_marked_by = doctorId;
+    if (options.no_show_reason !== undefined) {
+      updateData.no_show_reason = options.no_show_reason
+        ? String(options.no_show_reason).slice(0, 500)
+        : null;
+    }
+  }
 
   if (status === 'confirmed') {
     let updated = await prisma.doctorAppointment.update({
@@ -201,8 +242,9 @@ const updateAppointmentStatus = async (doctorId, appointmentId, status, notes) =
     return updated;
   }
 
-  if (status === 'in_progress' || status === 'checked_in') {
-    if (!appointment.meeting_id && appointment.consultation_mode === 'online') {
+  // Meeting rooms are for online visits when the consult actually starts.
+  if (status === 'in_progress') {
+    if (!appointment.meeting_id && (mode === 'online' || !isInPerson)) {
       const meeting = generateMeetingRoom(appointment.id);
       updateData.meeting_id = meeting.meeting_id;
       updateData.meeting_url = meeting.meeting_url;
@@ -216,13 +258,20 @@ const updateAppointmentStatus = async (doctorId, appointmentId, status, notes) =
   });
 
   try {
-    if (status === 'in_progress' || status === 'checked_in') {
+    // Clinic check-in must not start consultation — only Start Visit (in_progress) does.
+    if (status === 'in_progress') {
       await clinicalService.startConsultation(updated);
     }
     if (status === 'completed') {
       await clinicalService.completeConsultation(updated, {
         clinical_notes: notes || updated.consultation_notes,
       });
+      try {
+        const followUpsService = require('../follow-ups/followUps.service');
+        await followUpsService.markFollowUpCompletedForAppointment(appointmentId);
+      } catch (err) {
+        console.error('follow-up complete sync failed', err.message);
+      }
     }
   } catch (err) {
     console.error('clinical status sync failed', err.message);
@@ -247,6 +296,12 @@ const updateAppointmentStatus = async (doctorId, appointmentId, status, notes) =
   }
 
   if (status === 'cancelled' || status === 'rejected' || status === 'no_show') {
+    try {
+      const followUpsService = require('../follow-ups/followUps.service');
+      await followUpsService.markFollowUpNeedsRebooking(appointmentId);
+    } catch (err) {
+      console.error('follow-up rebooking sync failed', err.message);
+    }
     await inboxEvents.appointmentStatus({
       appointment: updated,
       status,
@@ -375,6 +430,43 @@ const getPrescription = async (doctorId, appointmentId) => {
   return prescription;
 };
 
+const markAppointmentPaid = async (doctorId, appointmentId) => {
+  const appointment = await prisma.doctorAppointment.findFirst({
+    where: { id: appointmentId, doctor_id: doctorId },
+    include: appointmentInclude,
+  });
+  if (!appointment) throw new AppError('Appointment not found', 404);
+
+  const method = String(appointment.payment_method || '').toLowerCase();
+  const status = String(appointment.payment_status || '').toLowerCase();
+  const isClinicCash =
+    method === 'pay_at_clinic' ||
+    method === 'cod' ||
+    method === 'cash' ||
+    status === 'pay_at_clinic';
+
+  if (status === 'paid') {
+    return appointment;
+  }
+
+  if (!isClinicCash) {
+    throw new AppError('Only pay-at-clinic appointments can be marked paid here', 400);
+  }
+
+  return prisma.doctorAppointment.update({
+    where: { id: appointmentId },
+    data: {
+      payment_status: 'paid',
+      paid_at: new Date(),
+      paid_by: doctorId,
+      // Keep legacy "cod" rows readable; normalize method when marking paid
+      payment_method:
+        method === 'cod' || method === 'cash' || !method ? 'pay_at_clinic' : appointment.payment_method,
+    },
+    include: appointmentInclude,
+  });
+};
+
 const getHospitals = async () =>
   prisma.hospital.findMany({
     where: { is_active: true },
@@ -400,6 +492,7 @@ module.exports = {
   updatePassword,
   getAppointments,
   updateAppointmentStatus,
+  markAppointmentPaid,
   updateSchedule,
   getSchedule,
   getPatients,

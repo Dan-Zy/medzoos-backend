@@ -1,8 +1,13 @@
+const { initFollowUpJobs } = require('./follow-up-overdue.job');
 const { logger } = require('../utils/logger');
 
-// Init all node-cron jobs here
 const initJobs = () => {
-  logger.info('Scheduled jobs initialized');
+  try {
+    initFollowUpJobs();
+    logger.info('Background jobs initialized (follow-up overdue)');
+  } catch (err) {
+    logger.error(`Failed to init jobs: ${err.message}`);
+  }
 };
 
 module.exports = { initJobs };

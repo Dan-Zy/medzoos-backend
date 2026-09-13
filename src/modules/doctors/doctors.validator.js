@@ -11,12 +11,29 @@ const bookAppointmentSchema = z.object({
     hospital_id: z.string().optional(),
     practice_location_id: z.string().optional(),
     share_records: z
-      .object({
-        share_prescriptions: z.boolean().optional(),
-        share_lab_reports: z.boolean().optional(),
-        share_medicines: z.boolean().optional(),
-        share_documents: z.boolean().optional(),
-      })
+      .union([
+        z.boolean(),
+        z.object({
+          share_prescriptions: z.boolean().optional(),
+          share_lab_reports: z.boolean().optional(),
+          share_medicines: z.boolean().optional(),
+          share_documents: z.boolean().optional(),
+        }),
+      ])
+      .optional(),
+    share_grants: z
+      .array(
+        z.object({
+          record_type: z.enum([
+            'visit_summary',
+            'prescription',
+            'lab_report',
+            'medical_document',
+            'visit_document',
+          ]),
+          record_id: z.string().min(1),
+        }),
+      )
       .optional(),
   }),
 });

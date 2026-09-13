@@ -80,6 +80,12 @@ router.use('/hospitals', hospitalsRoutes);
 router.use('/lab-tests', labTestsRoutes);
 router.use('/partners/doctor', doctorPortalRoutes);
 router.use('/partners/lab', labPortalRoutes);
+router.use('/customer/follow-ups', require('../modules/follow-ups/followUps.customer.routes'));
+router.use(
+  '/customer/appointments/:appointmentId/documents',
+  require('../modules/visit-documents/visitDocuments.customer.routes'),
+);
+router.use('/customer/medical-history', require('../modules/record-shares/recordShares.customer.routes'));
 router.use('/telehealth', telehealthRoutes);
 router.use('/prescription-orders', prescriptionOrdersRoutes);
 router.use('/notifications', notificationsRoutes);

@@ -17,12 +17,20 @@ const defaultShare = {
   share_documents: false,
 };
 
-const normalizeShare = (share = {}) => ({
-  share_prescriptions: share.share_prescriptions !== false,
-  share_lab_reports: share.share_lab_reports !== false,
-  share_medicines: share.share_medicines !== false,
-  share_documents: Boolean(share.share_documents),
-});
+const normalizeShare = (share = {}) => {
+  if (share === true) {
+    return { ...defaultShare, share_documents: true };
+  }
+  if (share === false) {
+    return { ...defaultShare };
+  }
+  return {
+    share_prescriptions: share.share_prescriptions !== false,
+    share_lab_reports: share.share_lab_reports !== false,
+    share_medicines: share.share_medicines !== false,
+    share_documents: Boolean(share.share_documents),
+  };
+};
 
 const upsertRelationship = async (tx, doctorId, patientId, appointmentDate) => {
   const existing = await tx.doctorPatientRelationship.findUnique({
@@ -54,8 +62,17 @@ const upsertRelationship = async (tx, doctorId, patientId, appointmentDate) => {
   });
 };
 
-const onAppointmentCreated = async (appointment, shareSettings) => {
-  const share = normalizeShare(shareSettings);
+const onAppointmentCreated = async (appointment, shareSettings, shareGrants = null) => {
+  const hasExplicitGrants = Array.isArray(shareGrants);
+  const recordSharesService = hasExplicitGrants
+    ? require('../record-shares/recordShares.service')
+    : null;
+  const share = hasExplicitGrants
+    ? recordSharesService.flagsFromGrantTypes(
+        shareGrants.map((g) => g.record_type || g.recordType).filter(Boolean),
+      )
+    : normalizeShare(shareSettings);
+
   const relationship = await prisma.$transaction(async (tx) => {
     const rel = await upsertRelationship(
       tx,
@@ -90,6 +107,18 @@ const onAppointmentCreated = async (appointment, shareSettings) => {
 
     return rel;
   });
+
+  if (hasExplicitGrants && shareGrants.length) {
+    try {
+      await recordSharesService.saveAppointmentGrants(
+        appointment.customer_id,
+        appointment.id,
+        shareGrants,
+      );
+    } catch (err) {
+      console.error('record share grants on book failed', err.message);
+    }
+  }
 
   return relationship;
 };
@@ -161,7 +190,13 @@ const completeConsultation = async (appointment, extras = {}) => {
   if (extras.symptoms !== undefined) data.symptoms = extras.symptoms;
   if (extras.diagnosis !== undefined) data.diagnosis = extras.diagnosis;
   if (extras.clinical_notes !== undefined) data.clinical_notes = extras.clinical_notes;
-  if (extras.follow_up_date) data.follow_up_date = new Date(extras.follow_up_date);
+  if (extras.follow_up_date) {
+    const parsed = new Date(extras.follow_up_date);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new AppError('Invalid follow-up date. Use YYYY-MM-DD or a valid date.', 400);
+    }
+    data.follow_up_date = parsed;
+  }
   if (extras.follow_up_notes !== undefined) data.follow_up_notes = extras.follow_up_notes;
 
   const updated = await prisma.consultation.update({
@@ -189,8 +224,18 @@ const updateConsultation = async (doctorId, appointmentId, payload) => {
   if (payload.diagnosis !== undefined) data.diagnosis = payload.diagnosis;
   if (payload.clinical_notes !== undefined) data.clinical_notes = payload.clinical_notes;
   if (payload.follow_up_notes !== undefined) data.follow_up_notes = payload.follow_up_notes;
-  if (payload.follow_up_date) data.follow_up_date = new Date(payload.follow_up_date);
-  if (payload.follow_up_date === null) data.follow_up_date = null;
+  if (payload.follow_up_date === null || payload.follow_up_date === '') {
+    data.follow_up_date = null;
+  } else if (payload.follow_up_date) {
+    const parsed = new Date(payload.follow_up_date);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new AppError(
+        'Invalid follow-up date. Use YYYY-MM-DD or a valid date.',
+        400
+      );
+    }
+    data.follow_up_date = parsed;
+  }
 
   if (payload.clinical_notes !== undefined) {
     await prisma.doctorAppointment.update({
@@ -199,10 +244,40 @@ const updateConsultation = async (doctorId, appointmentId, payload) => {
     });
   }
 
-  return prisma.consultation.update({
+  const updated = await prisma.consultation.update({
     where: { id: consultation.id },
     data,
   });
+
+  if (payload.follow_up_date || payload.follow_up_preset || payload.preferred_mode || payload.reason) {
+    try {
+      const followUpsService = require('../follow-ups/followUps.service');
+      if (payload.follow_up_date === null || payload.follow_up_date === '' || payload.follow_up_preset === 'none') {
+        await followUpsService.upsertFollowUpForConsultation(
+          consultation.id,
+          { preset: 'none' },
+          { notify: false },
+        );
+      } else if (payload.follow_up_date || payload.follow_up_preset) {
+        await followUpsService.upsertFollowUpForConsultation(
+          consultation.id,
+          {
+            recommended_date: payload.follow_up_date,
+            preset: payload.follow_up_preset,
+            notes: payload.follow_up_notes,
+            reason: payload.reason || payload.follow_up_reason,
+            preferred_mode: payload.preferred_mode,
+            priority: payload.priority,
+          },
+          { notify: true },
+        );
+      }
+    } catch (err) {
+      console.error('follow-up upsert from consultation update failed', err.message);
+    }
+  }
+
+  return updated;
 };
 
 const getConsultationByAppointment = async (doctorId, appointmentId) => {
@@ -223,12 +298,20 @@ const getConsultationByAppointment = async (doctorId, appointmentId) => {
 
   const consultation = appointment.consultation || (await ensureConsultation(appointment));
   const shared = await getSharedRecordsForDoctor(doctorId, appointment.customer_id);
+  let sharedHistory = null;
+  try {
+    const recordSharesService = require('../record-shares/recordShares.service');
+    sharedHistory = await recordSharesService.getAppointmentSharedHistory(doctorId, appointmentId);
+  } catch (err) {
+    console.error('appointment shared history failed', err.message);
+  }
 
   return {
     appointment,
     consultation,
     patient: sanitizePatient(appointment.customer),
     shared,
+    sharedHistory,
   };
 };
 
