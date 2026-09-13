@@ -385,14 +385,34 @@ const canJoinVideo = (appointment, role) => {
   };
 };
 
-const buildVideoRoomPayload = (appointmentId, meetingId) => {
+const buildVideoRoomPayload = (appointmentId, meetingId, opts = {}) => {
   const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
   const roomId = meetingId;
+  const jitsiRoom = `Medzoos_${roomId}`;
+  // meet.jit.si forces a separate Google/GitHub/Facebook moderator login.
+  // Element Call accepts anonymous join with the Medzoos display name.
+  const meetHost = String(process.env.JITSI_MEET_HOST || 'https://meet.element.io').replace(
+    /\/$/,
+    '',
+  );
+  const displayName = encodeURIComponent(opts.displayName || 'Guest');
+  const embedUrl =
+    `${meetHost}/${jitsiRoom}` +
+    `#config.prejoinPageEnabled=false` +
+    `&config.requireDisplayName=false` +
+    `&config.disableDeepLinking=true` +
+    `&config.startWithAudioMuted=false` +
+    `&config.startWithVideoMuted=false` +
+    `&userInfo.displayName="${displayName}"`;
+
   return {
     room_id: roomId,
     join_url: `${baseUrl.replace(/\/$/, '')}/consultation/${roomId}?appointment=${appointmentId}`,
     provider: 'jitsi',
-    jitsi_room: `Medzoos_${roomId}`,
+    jitsi_host: meetHost,
+    jitsi_room: jitsiRoom,
+    embed_url: embedUrl,
+    display_name: opts.displayName || null,
   };
 };
 

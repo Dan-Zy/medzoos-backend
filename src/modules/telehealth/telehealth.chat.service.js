@@ -103,8 +103,12 @@ const getChatContext = async (user, appointmentId) => {
   const chat = appointment.chat;
   const access = canAccessChat(appointment, chat);
   const videoAccess = canJoinVideo(appointment, user.role);
+  const displayName =
+    user.role === 'doctor'
+      ? appointment.doctor?.name || user.name || 'Doctor'
+      : appointment.customer?.name || user.name || 'Patient';
   const videoRoom = appointment.meeting_id
-    ? buildVideoRoomPayload(appointment.id, appointment.meeting_id)
+    ? buildVideoRoomPayload(appointment.id, appointment.meeting_id, { displayName })
     : null;
 
   return {
@@ -113,6 +117,11 @@ const getChatContext = async (user, appointmentId) => {
     access,
     videoAccess,
     videoRoom,
+    participant: {
+      displayName,
+      role: user.role,
+      userId: user.id,
+    },
     messages: chat?.messages?.map(formatMessage) || [],
   };
 };

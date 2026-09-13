@@ -46,11 +46,14 @@ const getVideoAccess = catchAsync(async (req, res) => {
     {
       videoAccess: context.videoAccess,
       videoRoom: context.videoRoom,
+      participant: context.participant,
       appointment: {
         id: context.appointment.id,
         status: context.appointment.status,
         slot: context.appointment.slot,
         appointment_date: context.appointment.appointment_date,
+        doctor: context.appointment.doctor,
+        customer: context.appointment.customer,
       },
     },
     'Video access fetched successfully'
